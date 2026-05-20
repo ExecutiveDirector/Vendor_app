@@ -1,18 +1,45 @@
+import 'package:dio/dio.dart';
 import '../../../core/api/dio_client.dart';
+import 'product_model.dart';
 
 class ProductsApi {
-  static Future<List<dynamic>> list() async {
-    final res = await ApiClient.dio.get('/vendor/products');
-    return res.data;
+  static Future<List<Product>> list() async {
+    final res = await ApiClient.dio.get('/vendors/inventory');
+    final data = res.data;
+    if (data is List) return data.map((e) => Product.fromJson(e)).toList();
+    return [];
   }
-  static Future<void> upsert(Map<String, dynamic> payload) async {
-    await ApiClient.dio.post('/vendor/products', data: payload);
+
+  static Future<List<Product>> listCatalog() async {
+    final res = await ApiClient.dio.get('/vendors/products');
+    final data = res.data;
+    if (data is List) return data.map((e) => Product.fromJson(e)).toList();
+    return [];
   }
+
+  static Future<Product> create(Map<String, dynamic> payload) async {
+    final res = await ApiClient.dio.post('/vendors/products', data: payload);
+    return Product.fromJson(
+        res.data['product'] ?? res.data['data'] ?? res.data);
+  }
+
+  static Future<void> update(int id, Map<String, dynamic> payload) async {
+    await ApiClient.dio.put('/admin/products/$id', data: payload);
+  }
+
   static Future<void> delete(String id) async {
-    await ApiClient.dio.delete('/vendor/products/$id');
+    await ApiClient.dio.delete('/vendors/products/$id');
   }
-  static Future<List<dynamic>> categories() async {
-    final res = await ApiClient.dio.get('/vendor/product_categories');
-    return res.data;
+
+  static Future<List<Category>> categories() async {
+    final res = await ApiClient.dio.get('/vendors/product_categories');
+    final data = res.data;
+    if (data is List) return data.map((e) => Category.fromJson(e)).toList();
+    return [];
+  }
+
+  static Future<List<dynamic>> outlets() async {
+    final res = await ApiClient.dio.get('/vendors/outlets');
+    return res.data is List ? res.data : [];
   }
 }

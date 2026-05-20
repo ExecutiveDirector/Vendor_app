@@ -1,135 +1,227 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import '../../../core/api/dio_client.dart';
+import '../data/order_model.dart';
+import '../data/orders_api.dart';
+import '../../../core/widgets/shared_widgets.dart';
 
 class OrdersScreen extends StatefulWidget {
   const OrdersScreen({super.key});
-
   @override
   State<OrdersScreen> createState() => _OrdersScreenState();
 }
 
 class _OrdersScreenState extends State<OrdersScreen>
     with SingleTickerProviderStateMixin {
-  late TabController _tabController;
-  List<dynamic> orders = [];
-  List<dynamic> filteredOrders = [];
-  bool loading = true;
-  String selectedStatus = 'all';
-  String searchQuery = '';
-
-  final List<String> statusTabs = [
+  late TabController _tabs;
+  final _statuses = [
     'all',
     'pending',
     'confirmed',
     'preparing',
-    'ready',
-    'dispatched'
+    'dispatched',
+    'delivered'
   ];
-  final Map<String, Color> statusColors = {
-    'pending': Colors.orange,
-    'confirmed': Colors.blue,
-    'preparing': Colors.purple,
-    'ready': Colors.green,
-    'dispatched': Colors.teal,
-    'delivered': Colors.green[700]!,
-    'cancelled': Colors.red,
-    'refunded': Colors.grey,
-  };
+  final _statusLabels = [
+    'All',
+    'Pending',
+    'Confirmed',
+    'Preparing',
+    'Dispatched',
+    'Delivered'
+  ];
+  List<Order> _all = [];
+  bool _loading = true;
+  String? _error;
+  String _search = '';
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: statusTabs.length, vsync: this);
-    _tabController.addListener(_onTabChanged);
-    _loadOrders();
+    _tabs = TabController(length: _statuses.length, vsync: this);
+    _load();
   }
 
   @override
   void dispose() {
-    _tabController.removeListener(_onTabChanged);
-    _tabController.dispose();
+    _tabs.dispose();
     super.dispose();
   }
 
-  void _onTabChanged() {
-    if (_tabController.indexIsChanging) {
-      setState(() {
-        selectedStatus = statusTabs[_tabController.index];
-      });
-      _filterOrders();
-    }
-  }
-
-  Future<void> _loadOrders() async {
-    try {
-      setState(() => loading = true);
-      final res = await ApiClient.dio.get('/vendor/orders', queryParameters: {
-        'include': 'items,customer',
-        'sort': 'created_at',
-        'order': 'desc',
-      });
-
-      setState(() {
-        orders = res.data ?? [];
-      });
-      _filterOrders();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error loading orders: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => loading = false);
-    }
-  }
-
-  void _filterOrders() {
+  Future<void> _load() async {
     setState(() {
-      filteredOrders = orders.where((order) {
-        final matchesStatus =
-            selectedStatus == 'all' || order['order_status'] == selectedStatus;
-        final matchesSearch = searchQuery.isEmpty ||
-            order['order_number']
-                .toString()
-                .toLowerCase()
-                .contains(searchQuery.toLowerCase()) ||
-            (order['customer_name'] ?? '')
-                .toString()
-                .toLowerCase()
-                .contains(searchQuery.toLowerCase());
-        return matchesStatus && matchesSearch;
-      }).toList();
+      _loading = true;
+      _error = null;
     });
+    try {
+      final data = await OrdersApi.list();
+      if (mounted)
+        setState(() {
+          _all = data;
+          _loading = false;
+        });
+    } catch (e) {
+      if (mounted)
+        setState(() {
+          _error = e.toString();
+          _loading = false;
+        });
+    }
   }
 
-  Future<void> _updateOrderStatus(String orderId, String newStatus) async {
+  List<Order> _forStatus(String status) {
+    var list = status == 'all'
+        ? _all
+        : _all.where((o) => o.orderStatus == status).toList();
+    if (_search.isNotEmpty) {
+      final q = _search.toLowerCase();
+      list = list
+          .where((o) =>
+              o.orderNumber.toLowerCase().contains(q) ||
+              (o.deliveryContact?.toLowerCase().contains(q) ?? false))
+          .toList();
+    }
+    return list;
+  }
+
+  int _count(String status) => status == 'all'
+      ? _all.length
+      : _all.where((o) => o.orderStatus == status).length;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Orders'),
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
+        ],
+        bottom: TabBar(
+          controller: _tabs,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          tabs: List.generate(
+            _statuses.length,
+            (i) => Tab(
+              child: Row(children: [
+                Text(_statusLabels[i]),
+                const SizedBox(width: 4),
+                if (!_loading)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      _count(_statuses[i]).toString(),
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: Theme.of(context).colorScheme.primary),
+                    ),
+                  ),
+              ]),
+            ),
+          ),
+        ),
+      ),
+      body: Column(children: [
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: TextField(
+            onChanged: (v) => setState(() => _search = v),
+            decoration: const InputDecoration(
+              hintText: 'Search orders...',
+              prefixIcon: Icon(Icons.search),
+              isDense: true,
+            ),
+          ),
+        ),
+        Expanded(
+          child: _loading
+              ? const AppLoading()
+              : _error != null
+                  ? AppError(message: _error!, onRetry: _load)
+                  : TabBarView(
+                      controller: _tabs,
+                      children: _statuses
+                          .map((s) => _OrderList(
+                                orders: _forStatus(s),
+                                onRefresh: _load,
+                              ))
+                          .toList(),
+                    ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _OrderList extends StatelessWidget {
+  final List<Order> orders;
+  final VoidCallback onRefresh;
+  const _OrderList({required this.orders, required this.onRefresh});
+
+  @override
+  Widget build(BuildContext context) {
+    if (orders.isEmpty) {
+      return const AppEmpty(
+        icon: Icons.receipt_long_outlined,
+        message: 'No orders found.',
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: () async => onRefresh(),
+      child: ListView.builder(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+        itemCount: orders.length,
+        itemBuilder: (_, i) =>
+            _OrderCard(order: orders[i], onRefresh: onRefresh),
+      ),
+    );
+  }
+}
+
+class _OrderCard extends StatelessWidget {
+  final Order order;
+  final VoidCallback onRefresh;
+  const _OrderCard({required this.order, required this.onRefresh});
+
+  static const _nextStatus = {
+    'pending': 'confirmed',
+    'confirmed': 'preparing',
+    'preparing': 'ready',
+    'ready': 'dispatched',
+    'dispatched': 'delivered',
+  };
+
+  static const _nextLabel = {
+    'pending': 'Confirm',
+    'confirmed': 'Start Preparing',
+    'preparing': 'Mark Ready',
+    'ready': 'Dispatch',
+    'dispatched': 'Mark Delivered',
+  };
+
+  Future<void> _advance(BuildContext context, String next) async {
     try {
-      await ApiClient.dio.patch('/vendor/orders/$orderId', data: {
-        'order_status': newStatus,
-      });
-
-      await _loadOrders();
-
-      if (mounted) {
+      await OrdersApi.updateStatus(order.orderId, next);
+      onRefresh();
+      if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Order status updated to ${newStatus.toUpperCase()}'),
-            backgroundColor: Colors.green,
+            content: Text('Order ${order.orderNumber} → $next'),
+            backgroundColor: Colors.teal,
           ),
         );
       }
     } catch (e) {
-      if (mounted) {
+      if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error updating order: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -137,540 +229,108 @@ class _OrdersScreenState extends State<OrdersScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: NestedScrollView(
-        headerSliverBuilder: (context, innerBoxIsScrolled) {
-          return [
-            SliverAppBar(
-              expandedHeight: 120,
-              floating: false,
-              pinned: true,
-              flexibleSpace: FlexibleSpaceBar(
-                background: Container(
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [Color(0xFF1565C0), Color(0xFF42A5F5)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                  ),
-                ),
-              ),
-              title: const Text(
-                'Orders Management',
-                style:
-                    TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-              ),
-              centerTitle: true,
-              actions: [
-                IconButton(
-                  onPressed: _loadOrders,
-                  icon: const Icon(Icons.refresh, color: Colors.white),
-                ),
-              ],
-              bottom: TabBar(
-                controller: _tabController,
-                isScrollable: true,
-                indicatorColor: Colors.white,
-                labelColor: Colors.white,
-                unselectedLabelColor: Colors.white70,
-                tabs: statusTabs.map((status) {
-                  final count = status == 'all'
-                      ? orders.length
-                      : orders.where((o) => o['order_status'] == status).length;
-                  return Tab(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(status.toUpperCase()),
-                        if (count > 0) ...[
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.3),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              count.toString(),
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  );
-                }).toList(),
-              ),
-            ),
-          ];
-        },
-        body: Column(
-          children: [
-            // Search Bar
-            Container(
-              padding: const EdgeInsets.all(16),
-              color: Colors.grey[50],
-              child: TextField(
-                decoration: InputDecoration(
-                  hintText: 'Search orders by number or customer...',
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: searchQuery.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(Icons.clear),
-                          onPressed: () {
-                            setState(() => searchQuery = '');
-                            _filterOrders();
-                          },
-                        )
-                      : null,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none,
-                  ),
-                  filled: true,
-                  fillColor: Colors.white,
-                ),
-                onChanged: (value) {
-                  setState(() => searchQuery = value);
-                  _filterOrders();
-                },
-              ),
-            ),
-
-            // Orders List
-            Expanded(
-              child: loading
-                  ? const Center(child: CircularProgressIndicator())
-                  : RefreshIndicator(
-                      onRefresh: _loadOrders,
-                      child: _buildOrdersList(),
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOrdersList() {
-    if (filteredOrders.isEmpty) {
-      return _buildEmptyState();
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: filteredOrders.length,
-      itemBuilder: (context, index) {
-        final order = filteredOrders[index];
-        return _buildOrderCard(order);
-      },
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.receipt_long_outlined,
-            size: 80,
-            color: Colors.grey[400],
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'No orders found',
-            style: TextStyle(
-              fontSize: 20,
-              color: Colors.grey[600],
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            selectedStatus == 'all'
-                ? 'Orders will appear here when customers place them'
-                : 'No ${selectedStatus.toUpperCase()} orders at the moment',
-            style: TextStyle(color: Colors.grey[500]),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOrderCard(Map<String, dynamic> order) {
-    final status = order['order_status'] ?? 'pending';
-    final statusColor = statusColors[status] ?? Colors.grey;
-    final orderItems = order['order_items'] as List? ?? [];
-    final totalItems = orderItems.fold<int>(
-        0, (sum, item) => sum + (item['quantity'] as int? ?? 0));
+    final cs = Theme.of(context).colorScheme;
+    final next = _nextStatus[order.orderStatus];
+    final nextLabel = _nextLabel[order.orderStatus];
+    final itemCount =
+        order.items.isNotEmpty ? '${order.items.length} items' : '—';
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      margin: const EdgeInsets.only(bottom: 10),
       child: InkWell(
+        onTap: () => context.go('/orders/${order.orderId}'),
         borderRadius: BorderRadius.circular(12),
-        onTap: () => context.go('/orders/${order['order_id']}'),
         child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header Row
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+          padding: const EdgeInsets.all(14),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(
+                child: Text(
+                  order.orderNumber,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+              ),
+              StatusBadge(status: order.orderStatus),
+            ]),
+            const SizedBox(height: 8),
+            Row(children: [
+              Icon(Icons.access_time, size: 14, color: Colors.grey.shade500),
+              const SizedBox(width: 4),
+              Text(_formatDate(order.createdAt),
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+              const Spacer(),
+              Text('KES ${order.totalAmount.toStringAsFixed(0)}',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: cs.primary,
+                      fontSize: 15)),
+            ]),
+            if (order.deliveryContact != null || order.deliveryAddress != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(children: [
+                  Icon(Icons.location_on_outlined,
+                      size: 14, color: Colors.grey.shade500),
+                  const SizedBox(width: 4),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Order #${order['order_number'] ?? order['order_id']}',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          order['customer_name'] ?? 'Walk-in Customer',
-                          style: TextStyle(
-                            color: Colors.grey[600],
-                            fontSize: 14,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: statusColor.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: statusColor.withOpacity(0.3)),
-                    ),
                     child: Text(
-                      status.toUpperCase(),
-                      style: TextStyle(
-                        color: statusColor,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                      ),
+                      order.deliveryAddress ?? order.deliveryContact ?? '',
+                      style:
+                          TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                ],
+                ]),
               ),
-
-              const SizedBox(height: 12),
-
-              // Order Details Row
-              Row(
-                children: [
-                  _buildDetailChip(
-                    Icons.shopping_cart,
-                    '$totalItems items',
-                    Colors.blue,
-                  ),
-                  const SizedBox(width: 8),
-                  _buildDetailChip(
-                    Icons.payments,
-                    'KES ${(order['total_amount'] ?? 0).toStringAsFixed(2)}',
-                    Colors.green,
-                  ),
-                  const SizedBox(width: 8),
-                  _buildDetailChip(
-                    Icons.access_time,
-                    _formatDateTime(order['created_at']),
-                    Colors.orange,
-                  ),
-                ],
-              ),
-
-              if (order['delivery_type'] != null) ...[
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Icon(
-                      order['delivery_type'] == 'pickup'
-                          ? Icons.store
-                          : Icons.delivery_dining,
-                      size: 16,
-                      color: Colors.grey[600],
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      order['delivery_type'].toString().toUpperCase(),
-                      style: TextStyle(
-                        color: Colors.grey[600],
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
+            if (order.items.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  order.items
+                      .map((i) => '${i.quantity}× ${i.productName}')
+                      .join(', '),
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ],
-
-              const SizedBox(height: 12),
-
-              // Action Buttons
-              _buildActionButtons(order),
+              ),
+            if (next != null && nextLabel != null) ...[
+              const SizedBox(height: 10),
+              Row(children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => context.go('/orders/${order.orderId}'),
+                    child: const Text('View Details'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => _advance(context, next),
+                    child: Text(nextLabel),
+                  ),
+                ),
+              ]),
             ],
-          ),
+          ]),
         ),
       ),
     );
   }
 
-  Widget _buildDetailChip(IconData icon, String text, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: color),
-          const SizedBox(width: 4),
-          Text(
-            text,
-            style: TextStyle(
-              color: color,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildActionButtons(Map<String, dynamic> order) {
-    final status = order['order_status'] ?? 'pending';
-
-    List<Widget> buttons = [];
-
-    switch (status) {
-      case 'pending':
-        buttons = [
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: () =>
-                  _updateOrderStatus(order['order_id'].toString(), 'confirmed'),
-              icon: const Icon(Icons.check_circle, size: 16),
-              label: const Text('Accept'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: () => _showRejectDialog(order['order_id'].toString()),
-              icon: const Icon(Icons.cancel, size: 16),
-              label: const Text('Reject'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.red,
-                side: const BorderSide(color: Colors.red),
-              ),
-            ),
-          ),
-        ];
-        break;
-
-      case 'confirmed':
-        buttons = [
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: () =>
-                  _updateOrderStatus(order['order_id'].toString(), 'preparing'),
-              icon: const Icon(Icons.kitchen, size: 16),
-              label: const Text('Start Preparing'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.purple,
-                foregroundColor: Colors.white,
-              ),
-            ),
-          ),
-        ];
-        break;
-
-      case 'preparing':
-        buttons = [
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: () =>
-                  _updateOrderStatus(order['order_id'].toString(), 'ready'),
-              icon: const Icon(Icons.done_all, size: 16),
-              label: const Text('Mark Ready'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
-              ),
-            ),
-          ),
-        ];
-        break;
-
-      case 'ready':
-        if (order['delivery_type'] == 'pickup') {
-          buttons = [
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () => _updateOrderStatus(
-                    order['order_id'].toString(), 'delivered'),
-                icon: const Icon(Icons.handshake, size: 16),
-                label: const Text('Customer Picked Up'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-            ),
-          ];
-        } else {
-          buttons = [
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () =>
-                    _showAssignRiderDialog(order['order_id'].toString()),
-                icon: const Icon(Icons.delivery_dining, size: 16),
-                label: const Text('Assign Rider'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-            ),
-          ];
-        }
-        break;
-
-      case 'dispatched':
-        buttons = [
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.teal.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.teal.withOpacity(0.3)),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.local_shipping, color: Colors.teal, size: 16),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Out for Delivery',
-                    style: TextStyle(
-                      color: Colors.teal,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ];
-        break;
-
-      default:
-        buttons = [
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Text(
-                'Order ${status.toUpperCase()}',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: statusColors[status] ?? Colors.grey,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-          ),
-        ];
-    }
-
-    return Row(children: buttons);
-  }
-
-  void _showRejectDialog(String orderId) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Reject Order'),
-        content: const Text(
-          'Are you sure you want to reject this order? This action cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _updateOrderStatus(orderId, 'cancelled');
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Reject Order'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showAssignRiderDialog(String orderId) {
-    // This would typically load available riders from the API
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Assign Rider'),
-        content:
-            const Text('Rider assignment feature will be implemented here.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _updateOrderStatus(orderId, 'dispatched');
-            },
-            child: const Text('Assign & Dispatch'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _formatDateTime(String? dateTimeStr) {
-    if (dateTimeStr == null) return 'Unknown';
+  String _formatDate(String raw) {
     try {
-      final dateTime = DateTime.parse(dateTimeStr);
+      final dt = DateTime.parse(raw).toLocal();
       final now = DateTime.now();
-      final difference = now.difference(dateTime);
-
-      if (difference.inMinutes < 1) return 'Just now';
-      if (difference.inMinutes < 60) return '${difference.inMinutes}m ago';
-      if (difference.inHours < 24) return '${difference.inHours}h ago';
-      if (difference.inDays == 1) return 'Yesterday';
-      if (difference.inDays < 7) return '${difference.inDays} days ago';
-
-      return '${dateTime.day}/${dateTime.month}/${dateTime.year}';
-    } catch (e) {
-      return 'Unknown';
+      final diff = now.difference(dt);
+      if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+      if (diff.inHours < 24) return '${diff.inHours}h ago';
+      return '${dt.day}/${dt.month} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return raw;
     }
   }
 }

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'src/core/bootstrap.dart';
+import 'src/core/theme.dart';
+import 'src/core/router.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -9,6 +11,7 @@ Future<void> main() async {
 
 class VendorApp extends StatelessWidget {
   const VendorApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(

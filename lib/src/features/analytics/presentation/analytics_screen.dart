@@ -1,19 +1,18 @@
 import 'package:flutter/material.dart';
-import '../../../core/api/dio_client.dart';
-import '../../../core/widgets/shared_widgets.dart';
+import '../data/analytics_api.dart';
 
 class AnalyticsScreen extends StatefulWidget {
   const AnalyticsScreen({super.key});
+
   @override
   State<AnalyticsScreen> createState() => _AnalyticsScreenState();
 }
 
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
-  Map<String, dynamic>? _stats;
-  List<dynamic> _topProducts = [];
+  AnalyticsSummary? _summary;
+
   bool _loading = true;
   String? _error;
-  String _period = 'month';
 
   @override
   void initState() {
@@ -22,264 +21,362 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   }
 
   Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
     try {
-      final results = await Future.wait([
-        ApiClient.dio.get('/vendors/dashboard/stats'),
-        ApiClient.dio.get('/vendors/analytics/sales',
-            queryParameters: {'period': _period}),
-        ApiClient.dio.get('/vendors/analytics/products'),
-      ]);
+      final summary = await AnalyticsApi.summary();
 
-      if (mounted) {
-        setState(() {
-          _stats = results[0].data is Map ? results[0].data : {};
-          final sales = results[1].data;
-          final products = results[2].data;
-          _topProducts = products is List ? products.take(5).toList() : [];
-          if (sales is Map) {
-            _stats!.addAll(sales);
-          }
-          _loading = false;
-        });
-      }
+      setState(() {
+        _summary = summary;
+        _loading = false;
+        _error = null;
+      });
     } catch (e) {
-      if (mounted)
-        setState(() {
-          _error = e.toString();
-          _loading = false;
-        });
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Analytics'),
         actions: [
-          PopupMenuButton<String>(
-            initialValue: _period,
-            onSelected: (v) => setState(() {
-              _period = v;
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: () {
+              setState(() {
+                _loading = true;
+                _error = null;
+              });
+
               _load();
-            }),
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'week', child: Text('Last 7 days')),
-              PopupMenuItem(value: 'month', child: Text('This Month')),
-              PopupMenuItem(value: 'year', child: Text('This Year')),
-            ],
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(children: [
-                Text(_periodLabel, style: const TextStyle(fontSize: 13)),
-                const Icon(Icons.arrow_drop_down),
-              ]),
-            ),
+            },
           ),
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
         ],
       ),
       body: _loading
-          ? const AppLoading()
+          ? const Center(
+              child: CircularProgressIndicator(),
+            )
           : _error != null
-              ? AppError(message: _error!, onRetry: _load)
+              ? _ErrorView(
+                  error: _error!,
+                  onRetry: () {
+                    setState(() {
+                      _loading = true;
+                      _error = null;
+                    });
+
+                    _load();
+                  },
+                )
               : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView(
                     padding: const EdgeInsets.all(16),
                     children: [
-                      // KPI grid
-                      GridView.count(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        crossAxisCount: 2,
-                        mainAxisSpacing: 10,
-                        crossAxisSpacing: 10,
-                        childAspectRatio: 1.4,
-                        children: [
-                          _KpiCard(
-                            icon: Icons.receipt_long,
+                      _section(
+                        'Overview',
+                        [
+                          _StatCard(
                             label: 'Total Orders',
-                            value:
-                                '${_stats?['totalOrders'] ?? _stats?['orderCount'] ?? 0}',
+                            value: '${_summary?.orderCount ?? 0}',
+                            icon: Icons.receipt_long,
                             color: cs.primary,
                           ),
-                          _KpiCard(
-                            icon: Icons.pending_outlined,
-                            label: 'Pending',
-                            value: '${_stats?['pendingOrders'] ?? 0}',
+                          _StatCard(
+                            label: 'Revenue',
+                            value: _formatCurrency(_summary?.revenue ?? 0),
+                            icon: Icons.attach_money,
+                            color: Colors.green,
+                          ),
+                          _StatCard(
+                            label: 'Period',
+                            value: (_summary?.period ?? 'month').toUpperCase(),
+                            icon: Icons.calendar_month,
                             color: Colors.orange,
                           ),
-                          _KpiCard(
-                            icon: Icons.payments_outlined,
-                            label: 'Revenue',
-                            value: 'KES ${_formatNum(_stats?['revenue'] ?? 0)}',
-                            color: Colors.teal,
-                          ),
-                          _KpiCard(
-                            icon: Icons.inventory_2_outlined,
-                            label: 'Products',
-                            value: '${_stats?['totalProducts'] ?? 0}',
-                            color: Colors.purple,
+                          _StatCard(
+                            label: 'Start Date',
+                            value: _summary?.startDate != null
+                                ? _formatDate(_summary!.startDate!)
+                                : '—',
+                            icon: Icons.date_range,
+                            color: cs.tertiary,
                           ),
                         ],
                       ),
+                      const SizedBox(height: 12),
+                      _InfoCard(
+                        title: 'Analytics Period',
+                        value: _summary?.period ?? 'All time',
+                      ),
+                      if (_summary?.startDate != null)
+                        _InfoCard(
+                          title: 'From',
+                          value: _formatDate(_summary!.startDate!),
+                        ),
                       const SizedBox(height: 20),
-
-                      // Period comparison
-                      if (_stats != null) ...[
-                        const SectionHeader(title: 'Period Summary'),
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(children: [
-                              _SummaryRow(
-                                label: 'Period',
-                                value: _periodLabel,
-                                icon: Icons.calendar_today,
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Insights',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleMedium
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                    ),
                               ),
-                              const Divider(height: 20),
-                              _SummaryRow(
-                                label: 'Revenue',
-                                value:
-                                    'KES ${_formatNum(_stats?['revenue'] ?? _stats?['totalRevenue'] ?? 0)}',
+                              const SizedBox(height: 12),
+                              _InsightTile(
                                 icon: Icons.trending_up,
-                                valueColor: Colors.teal,
+                                title: 'Sales Performance',
+                                subtitle:
+                                    'Your store analytics are based on delivered orders.',
                               ),
-                              const Divider(height: 20),
-                              _SummaryRow(
-                                label: 'Orders Completed',
-                                value:
-                                    '${_stats?['orderCount'] ?? _stats?['totalOrders'] ?? 0}',
-                                icon: Icons.check_circle_outline,
-                                valueColor: Colors.green,
+                              const Divider(),
+                              _InsightTile(
+                                icon: Icons.bar_chart,
+                                title: 'Revenue Tracking',
+                                subtitle:
+                                    'Revenue is automatically calculated from successful orders.',
                               ),
-                            ]),
+                              const Divider(),
+                              _InsightTile(
+                                icon: Icons.inventory_2_outlined,
+                                title: 'Product Analytics',
+                                subtitle:
+                                    'Top-selling products can be integrated from /analytics/products.',
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(height: 16),
-                      ],
-
-                      // Top products
-                      if (_topProducts.isNotEmpty) ...[
-                        const SectionHeader(title: 'Top Selling Products'),
-                        ..._topProducts.asMap().entries.map((e) {
-                          final i = e.key;
-                          final p = e.value;
-                          final sold = p['total_sold'] ?? 0;
-                          final revenue = p['total_revenue'] ?? 0;
-                          return Card(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            child: ListTile(
-                              leading: CircleAvatar(
-                                backgroundColor: cs.primary.withOpacity(0.1),
-                                child: Text('${i + 1}',
-                                    style: TextStyle(
-                                        color: cs.primary,
-                                        fontWeight: FontWeight.bold)),
-                              ),
-                              title: Text(p['product_name'] ?? '',
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w500)),
-                              subtitle: Text('${sold} units sold'),
-                              trailing: Text(
-                                'KES ${_formatNum(revenue)}',
-                                style: TextStyle(
-                                    color: cs.primary,
-                                    fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          );
-                        }),
-                      ],
-                      const SizedBox(height: 32),
+                      ),
                     ],
                   ),
                 ),
     );
   }
 
-  String get _periodLabel {
-    switch (_period) {
-      case 'week':
-        return 'Last 7 Days';
-      case 'year':
-        return 'This Year';
-      default:
-        return 'This Month';
+  String _formatCurrency(dynamic val) {
+    if (val == null) return '—';
+
+    final n = double.tryParse(val.toString()) ?? 0;
+
+    return 'KES ${n.toStringAsFixed(0)}';
+  }
+
+  String _formatDate(dynamic val) {
+    try {
+      if (val is DateTime) {
+        return val.toLocal().toString().substring(0, 10);
+      }
+
+      return DateTime.parse(val.toString())
+          .toLocal()
+          .toString()
+          .substring(0, 10);
+    } catch (_) {
+      return val.toString();
     }
   }
 
-  String _formatNum(dynamic v) {
-    final n = (v is num) ? v.toDouble() : double.tryParse(v.toString()) ?? 0.0;
-    if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
-    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
-    return n.toStringAsFixed(0);
+  Widget _section(
+    String title,
+    List<Widget> cards,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+        ),
+        const SizedBox(height: 10),
+        GridView.count(
+          crossAxisCount: 2,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+          childAspectRatio: 1.5,
+          children: cards,
+        ),
+      ],
+    );
   }
 }
 
-class _KpiCard extends StatelessWidget {
-  final IconData icon;
+class _StatCard extends StatelessWidget {
   final String label;
   final String value;
+  final IconData icon;
   final Color color;
-  const _KpiCard({
-    required this.icon,
+
+  const _StatCard({
     required this.label,
     required this.value,
+    required this.icon,
     required this.color,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.2)),
+    return Card(
+      elevation: 1,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  icon,
+                  color: color,
+                  size: 18,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: Theme.of(context).textTheme.labelSmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            Text(
+              value,
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
+            ),
+          ],
+        ),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Icon(icon, color: color, size: 24),
-        const Spacer(),
-        Text(value,
-            style: TextStyle(
-                fontSize: 20, fontWeight: FontWeight.bold, color: color)),
-        const SizedBox(height: 2),
-        Text(label,
-            style: TextStyle(fontSize: 12, color: color.withOpacity(0.8))),
-      ]),
     );
   }
 }
 
-class _SummaryRow extends StatelessWidget {
-  final String label;
+class _InfoCard extends StatelessWidget {
+  final String title;
   final String value;
-  final IconData icon;
-  final Color? valueColor;
-  const _SummaryRow({
-    required this.label,
+
+  const _InfoCard({
+    required this.title,
     required this.value,
-    required this.icon,
-    this.valueColor,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Row(children: [
-      Icon(icon, size: 18, color: Colors.grey),
-      const SizedBox(width: 10),
-      Text(label, style: const TextStyle(color: Colors.grey)),
-      const Spacer(),
-      Text(value,
-          style: TextStyle(
-              fontWeight: FontWeight.bold, fontSize: 15, color: valueColor)),
-    ]);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        title: Text(
+          title,
+          style: const TextStyle(
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        trailing: Text(
+          value,
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+      ),
+    );
+  }
+}
+
+class _InsightTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  const _InsightTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ErrorView extends StatelessWidget {
+  final String error;
+  final VoidCallback onRetry;
+
+  const _ErrorView({
+    required this.error,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.error_outline,
+              size: 48,
+              color: Colors.red,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              error,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: onRetry,
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

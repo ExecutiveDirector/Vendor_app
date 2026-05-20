@@ -39,9 +39,7 @@ GoRouter createRouter() => GoRouter(
         GoRoute(
             path: '/notifications',
             builder: (c, s) => const NotificationsScreen()),
-        GoRoute(
-            path: '/analytics',
-            builder: (c, s) => const VendorAnalyticsScreen()),
+        GoRoute(path: '/analytics', builder: (c, s) => const AnalyticsScreen()),
         GoRoute(path: '/support', builder: (c, s) => const SupportScreen()),
         GoRoute(path: '/settings', builder: (c, s) => const SettingsScreen()),
         GoRoute(
